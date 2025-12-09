@@ -14,7 +14,7 @@ class TicketCloseView(ui.View):
         self.bot = bot
         super().__init__(timeout=None)
 
-    @ui.button(label="🔒 티켓 종료 (관리자)", style=discord.ButtonStyle.red, custom_id="ticket_close_thread_btn", emoji="⛔")
+    @ui.button(label="🔒 티켓 종료", style=discord.ButtonStyle.red, custom_id="ticket_close_thread_btn", emoji="⛔")
     async def close_ticket(self, interaction: discord.Interaction, button: ui.Button):
         # --- 권한 체크 ---
         url = os.getenv('SUPABASE_URL')
@@ -36,7 +36,7 @@ class TicketCloseView(ui.View):
             return
 
         # --- 종료 로직 ---
-        await interaction.response.send_message("🔒 티켓을 종료하고 유저를 내보냅니다...", ephemeral=False)
+        await interaction.response.send_message("🔒 티켓을 종료합합니다...", ephemeral=False)
         
         thread = interaction.channel
         if not isinstance(thread, discord.Thread): return
@@ -146,8 +146,8 @@ class TicketCog(commands.Cog):
     @app_commands.checks.has_permissions(administrator=True)
     async def send_ticket_panel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         embed = discord.Embed(
-            title="📬 고객센터 / 1:1 문의",
-            description="아래 버튼을 누르면 관리자와 대화할 수 있는 **비공개 스레드**가 열립니다.",
+            title="📬 문의",
+            description="아래 버튼을 누르면 관리자와 대화할 수 있는 **티켓**이 열립니다.",
             color=discord.Color.blurple()
         )
         embed.set_thumbnail(url=interaction.guild.icon.url if interaction.guild.icon else None)
