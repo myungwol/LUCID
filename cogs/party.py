@@ -22,18 +22,16 @@ class RecruitAcceptView(ui.View):
     async def accept_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer()
         
-        # 1. 신청 상태 확인
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
         
+        # 1. 신청 상태 확인
         res = supabase.table("party_applications").select("status").eq("id", self.app_db_id).execute()
         if not res.data or res.data[0]['status'] == 'cancelled':
             await interaction.followup.send("❌ 이미 취소된 신청입니다.")
-            try:
-                await interaction.message.delete() # 취소된거면 메시지 삭제
-            except:
-                pass
+            try: await interaction.message.delete()
+            except: pass
             return
 
         guild = self.bot.get_guild(self.guild_id)
@@ -68,7 +66,7 @@ class RecruitAcceptView(ui.View):
                 reason="파티 매칭 성공"
             )
 
-            # 4. DM 업데이트 (성공 표시)
+            # 4. DM 업데이트
             embed = interaction.message.embeds[0]
             embed.color = discord.Color.green()
             embed.set_footer(text="✅ 매칭 성공! 방이 생성되었습니다.")
@@ -109,13 +107,22 @@ class RecruitApplyView(ui.View):
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
 
-        # 블랙리스트 체크
+        # 1. 호스트 정보 가져오기
+        host = self.bot.get_user(self.host_id)
+        if not host:
+            try: host = await self.bot.fetch_user(self.host_id)
+            except: 
+                await interaction.response.send_message("❌ 모집자를 찾을 수 없습니다.", ephemeral=True)
+                return
+
+        # 2. 블랙리스트 체크 & 쉐도우 밴
         blk_res = supabase.table("personal_blacklists").select("*").eq("user_id", self.host_id).eq("target_id", interaction.user.id).execute()
         if blk_res.data:
-            await interaction.response.send_message("🚫 해당 유저에게 차단되어 신청을 보낼 수 없습니다.", ephemeral=True)
+            # 차단당했지만 성공 메시지만 보임 (DM 안 감)
+            await interaction.response.send_message(f"✅ **{host.name}**님에게 신청을 보냈습니다!", ephemeral=True)
             return
 
-        # 중복/재신청 체크
+        # 3. 중복/재신청 체크
         hist_res = supabase.table("party_applications").select("*").eq("host_id", self.host_id).eq("applicant_id", interaction.user.id).execute()
         if hist_res.data:
             status = hist_res.data[0]['status']
@@ -129,13 +136,7 @@ class RecruitApplyView(ui.View):
                 await interaction.response.send_message("✅ 이미 매칭된 상대입니다.", ephemeral=True)
                 return
 
-        host = self.bot.get_user(self.host_id)
-        if not host:
-            try: host = await self.bot.fetch_user(self.host_id)
-            except: 
-                await interaction.response.send_message("❌ 모집자를 찾을 수 없습니다.", ephemeral=True)
-                return
-
+        # 4. 정상 신청
         try:
             embed = discord.Embed(
                 title="💌 파티 신청 도착!",
@@ -146,7 +147,6 @@ class RecruitApplyView(ui.View):
             embed.add_field(name="신청자 프로필", value=interaction.user.mention, inline=False)
             embed.set_footer(text="수락 버튼을 누르면 1:1 방이 생성됩니다.")
 
-            # DB 임시 저장
             insert_data = {"host_id": self.host_id, "applicant_id": interaction.user.id, "status": "pending"}
             res = supabase.table("party_applications").insert(insert_data).execute()
             app_id = res.data[0]['id']
@@ -164,33 +164,43 @@ class RecruitApplyView(ui.View):
 
 
 # ==========================================
-# 3. [모달/뷰] 블랙리스트 & 모집글 작성
+# 3. [모달/뷰] 블랙리스트 (토글 기능 적용됨)
 # ==========================================
 class BlacklistUserSelect(ui.UserSelect):
     def __init__(self):
-        super().__init__(placeholder="차단할 유저를 선택하세요", min_values=1, max_values=1)
+        super().__init__(placeholder="차단/해제할 유저를 선택하세요", min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
         target = self.values[0]
         if target.id == interaction.user.id:
-            await interaction.response.send_message("❌ 본인은 차단할 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message("❌ 자기 자신은 차단할 수 없습니다.", ephemeral=True)
             return
 
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
         
-        try:
+        # 1. 이미 차단 여부 확인
+        res = supabase.table("personal_blacklists").select("*").eq("user_id", interaction.user.id).eq("target_id", target.id).execute()
+        
+        if res.data:
+            # 2-A. 이미 차단됨 -> 해제 (삭제)
+            supabase.table("personal_blacklists").delete().eq("user_id", interaction.user.id).eq("target_id", target.id).execute()
+            await interaction.response.send_message(f"🔓 **{target.name}**님의 차단을 **해제**했습니다.", ephemeral=True)
+        else:
+            # 2-B. 차단 안됨 -> 차단 (추가)
             supabase.table("personal_blacklists").insert({"user_id": interaction.user.id, "target_id": target.id}).execute()
-            await interaction.response.send_message(f"🚫 **{target.name}**님을 차단했습니다.", ephemeral=True)
-        except:
-            await interaction.response.send_message("⚠️ 이미 차단된 유저입니다.", ephemeral=True)
+            await interaction.response.send_message(f"🚫 **{target.name}**님을 **차단**했습니다.\n이제 이 유저는 나에게 신청을 보낼 수 없습니다.", ephemeral=True)
 
 class BlacklistView(ui.View):
     def __init__(self):
         super().__init__()
         self.add_item(BlacklistUserSelect())
 
+
+# ==========================================
+# 4. [뷰] 모집글 작성 (멘션 포함)
+# ==========================================
 class RecruitSelectView(ui.View):
     def __init__(self, bot, settings, user_profile):
         super().__init__(timeout=60)
@@ -199,7 +209,7 @@ class RecruitSelectView(ui.View):
         self.profile = user_profile
 
     async def send_recruit_msg(self, interaction: discord.Interaction, target_channel_id: int, tag: str):
-        # 쿨타임 확인
+        # 쿨타임
         last_str = self.profile.get('last_recruit_at')
         if last_str:
             last = datetime.fromisoformat(last_str.replace('Z', '+00:00'))
@@ -215,6 +225,10 @@ class RecruitSelectView(ui.View):
             await interaction.response.send_message("❌ 채널 오류", ephemeral=True)
             return
 
+        # 멘션
+        recruit_role_id = self.settings.get('recruit_role_id')
+        mention_text = f"<@&{recruit_role_id}>" if recruit_role_id else ""
+
         embed = discord.Embed(color=0xFFB6C1)
         embed.set_author(name=f"{tag} 파티 모집", icon_url=interaction.user.display_avatar.url)
         embed.description = (
@@ -228,13 +242,12 @@ class RecruitSelectView(ui.View):
 
         try:
             view = RecruitApplyView(self.bot, interaction.user.id)
-            msg = await channel.send(embed=embed, view=view)
+            msg = await channel.send(content=mention_text, embed=embed, view=view)
             
             url = os.getenv('SUPABASE_URL')
             key = os.getenv('SUPABASE_KEY')
             supabase: Client = create_client(url, key)
             
-            # DB 저장
             supabase.table("party_recruits").upsert({
                 "user_id": interaction.user.id,
                 "guild_id": interaction.guild.id,
@@ -272,7 +285,7 @@ class RecruitSelectView(ui.View):
 
 
 # ==========================================
-# 4. [메인 패널] 상단/하단
+# 5. [메인 패널] 상단/하단
 # ==========================================
 class MainTopView(ui.View):
     def __init__(self, bot):
@@ -298,9 +311,10 @@ class MainTopView(ui.View):
         from cogs.profile import ProfileEditView
         await interaction.response.send_message("📝 **프로필 설정**", view=ProfileEditView(), ephemeral=True)
 
-    @ui.button(label="블랙", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
+    # 이름 변경됨: 블랙 -> 블랙/해제
+    @ui.button(label="블랙/해제", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
     async def blacklist_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_message("🚫 **차단 관리**", view=BlacklistView(), ephemeral=True)
+        await interaction.response.send_message("🚫 **차단/해제 관리**\n유저를 선택하면 차단하거나 차단을 해제합니다.", view=BlacklistView(), ephemeral=True)
 
 
 class MainBottomView(ui.View):
@@ -308,10 +322,8 @@ class MainBottomView(ui.View):
         self.bot = bot
         super().__init__(timeout=None)
 
-    # A. 모집 삭제 (ephemeral 적용)
     @ui.button(label="모집 삭제", style=discord.ButtonStyle.red, custom_id="party_delete_recruit_btn", emoji="🗑️")
     async def delete_recruit_btn(self, interaction: discord.Interaction, button: ui.Button):
-        # 1. defer에 ephemeral=True 설정
         await interaction.response.defer(ephemeral=True)
         
         url = os.getenv('SUPABASE_URL')
@@ -341,10 +353,8 @@ class MainBottomView(ui.View):
         except Exception as e:
             await interaction.followup.send(f"❌ 오류: {e}", ephemeral=True)
 
-    # B. 신청 삭제 (ephemeral 적용 + DM 삭제)
     @ui.button(label="신청 삭제", style=discord.ButtonStyle.secondary, custom_id="party_cancel_apply_btn", emoji="✖️")
     async def cancel_apply_btn(self, interaction: discord.Interaction, button: ui.Button):
-        # 1. defer에 ephemeral=True 설정
         await interaction.response.defer(ephemeral=True)
 
         url = os.getenv('SUPABASE_URL')
@@ -358,10 +368,8 @@ class MainBottomView(ui.View):
 
         count = 0
         for app in res.data:
-            # 상태 변경
             supabase.table("party_applications").update({"status": "cancelled"}).eq("id", app['id']).execute()
             
-            # DM 메시지 삭제 로직
             host_id = app['host_id']
             dm_msg_id = app.get('dm_message_id')
             
@@ -370,18 +378,16 @@ class MainBottomView(ui.View):
                     host = await self.bot.fetch_user(host_id)
                     dm_channel = host.dm_channel or await host.create_dm()
                     msg = await dm_channel.fetch_message(dm_msg_id)
-                    
-                    # [변경됨] DM 메시지 완전 삭제
-                    await msg.delete()
+                    await msg.delete() # DM 삭제
                     count += 1
                 except:
                     pass
         
-        await interaction.followup.send(f"✅ 총 **{count}**건의 신청을 철회했습니다.\n(취소한 유저에게는 다시 신청할 수 없습니다)", ephemeral=True)
+        await interaction.followup.send(f"✅ 총 **{count}**건의 신청을 철회했습니다.", ephemeral=True)
 
 
 # ==========================================
-# 5. [Cog] 메인 및 루프
+# 6. [Cog] 메인 및 루프
 # ==========================================
 class PartyCog(commands.Cog):
     def __init__(self, bot):
