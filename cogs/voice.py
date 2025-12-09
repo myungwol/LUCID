@@ -41,16 +41,18 @@ class VoiceLimitModal(ui.Modal, title="인원 제한 변경"):
         await interaction.response.send_message(msg, ephemeral=True)
 
 # ==========================================
-# 3. [버튼] 컨트롤 패널 뷰
+# 3. [버튼] 컨트롤 패널 뷰 (수정됨: 주인 ID 기억하기)
 # ==========================================
 class VoiceControlView(ui.View):
-    def __init__(self):
+    # 버튼을 만들 때 '누가 주인인지(owner_id)' 정보를 받아서 기억해둡니다.
+    def __init__(self, owner_id: int):
         super().__init__(timeout=None) 
+        self.owner_id = owner_id
 
+    # 버튼을 누른 사람이 주인인지 확인하는 검문소
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        permissions = interaction.channel.permissions_for(interaction.user)
-        if not permissions.manage_channels:
-            await interaction.response.send_message("❌ 방 주인(관리자)만 설정할 수 있습니다.", ephemeral=True)
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("❌ 방 주인만 설정할 수 있습니다.", ephemeral=True)
             return False
         return True
 
@@ -105,10 +107,13 @@ class VoiceCog(commands.Cog):
 
             try:
                 await member.move_to(new_channel)
-                await new_channel.set_permissions(member, manage_channels=True, connect=True)
+                
+                # [수정됨] 채널 관리(manage_channels) 권한은 주지 않습니다!
+                # 단순 접속 권한만 확실하게 부여 (이미 있을 수 있지만 안전장치)
+                await new_channel.set_permissions(member, connect=True)
 
-                # [수정됨] 임베드 없이 멘션만 보내고 버튼 달기
-                view = VoiceControlView()
+                # [수정됨] 뷰(View)를 만들 때 주인의 ID(member.id)를 알려줍니다.
+                view = VoiceControlView(owner_id=member.id)
                 await new_channel.send(content=member.mention, view=view)
 
             except Exception as e:
