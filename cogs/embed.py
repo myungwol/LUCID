@@ -3,7 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 from discord import ui
 
-# 1. [입력창 만들기] 팝업으로 뜰 모달창 정의
+# 1. [팝업창] 모달 정의 (이전과 동일)
 class EmbedModal(ui.Modal):
     def __init__(self, target_channel: discord.TextChannel, bot_user, edit_msg: discord.Message = None):
         # 모달창 제목 설정
@@ -14,7 +14,7 @@ class EmbedModal(ui.Modal):
         self.bot_user = bot_user
         self.edit_msg = edit_msg
 
-        # 입력 항목들 추가
+        # 입력 항목들
         self.embed_title = ui.TextInput(
             label="제목 (비워두면 제목 없음)", 
             placeholder="제목을 입력하세요 (선택사항)", 
@@ -43,14 +43,13 @@ class EmbedModal(ui.Modal):
             if og_embed.title: self.embed_title.default = og_embed.title
             if og_embed.description: self.embed_content.default = og_embed.description
             if og_embed.image: self.embed_image.default = og_embed.image.url
-            # 색상은 텍스트로 복원하기 어려워서 패스
 
         self.add_item(self.embed_title)
         self.add_item(self.embed_content)
         self.add_item(self.embed_color)
         self.add_item(self.embed_image)
 
-    # 색상 변환 함수
+    # 색상 변환
     def get_color(self, color_str: str):
         color_map = {
             "빨강": discord.Color.red(), "red": discord.Color.red(),
@@ -62,73 +61,59 @@ class EmbedModal(ui.Modal):
             "흰색": discord.Color.from_rgb(255, 255, 255), "white": discord.Color.from_rgb(255, 255, 255),
         }
         
-        if color_str in color_map:
-            return color_map[color_str]
-        
+        if color_str in color_map: return color_map[color_str]
         if color_str.startswith("#"):
-            try:
-                return discord.Color.from_str(color_str)
-            except:
-                pass
-        
-        return discord.Color.brand_green() # 기본값
+            try: return discord.Color.from_str(color_str)
+            except: pass
+        return discord.Color.brand_green()
 
-    # [전송 버튼] 눌렀을 때 실행되는 함수
+    # [전송/수정 버튼 클릭 시]
     async def on_submit(self, interaction: discord.Interaction):
-        # 임베드 만들기
         color = self.get_color(self.embed_color.value.strip())
         embed = discord.Embed(description=self.embed_content.value, color=color)
         
-        # 제목이 있을 때만 설정
         if self.embed_title.value.strip():
             embed.title = self.embed_title.value
             
-        # 이미지가 있을 때만 설정
         if self.embed_image.value.strip():
             embed.set_image(url=self.embed_image.value)
 
-        # ❌ 작성자(footer) 넣는 코드를 삭제했습니다.
+        # 작성자(Footer) 없이 깔끔하게 전송
 
         try:
             if self.edit_msg:
-                # 수정 모드
                 await self.edit_msg.edit(embed=embed)
                 await interaction.response.send_message("✅ 패널이 수정되었습니다!", ephemeral=True)
             else:
-                # 작성 모드
                 await self.target_channel.send(embed=embed)
                 await interaction.response.send_message(f"✅ {self.target_channel.mention} 채널에 패널을 보냈습니다!", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ 오류 발생: {e}", ephemeral=True)
 
 
-# 2. [명령어 연결] Cogs 클래스
+# 2. [Cogs] 명령어 및 컨텍스트 메뉴 연결
 class EmbedCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # (1) 생성은 슬래시 커맨드로 유지 (/패널작성)
     @app_commands.command(name="패널작성", description="입력창을 띄워 깔끔한 임베드 패널을 작성합니다.")
     @app_commands.describe(channel="패널을 보낼 채널")
     @app_commands.checks.has_permissions(administrator=True)
     async def create_panel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await interaction.response.send_modal(EmbedModal(target_channel=channel, bot_user=self.bot.user))
 
-    @app_commands.command(name="패널수정", description="기존 패널 내용을 수정합니다.")
-    @app_commands.describe(channel="채널 선택", message_id="수정할 메시지 ID")
+    # (2) 수정은 우클릭 메뉴로 변경 (Context Menu)
+    @app_commands.context_menu(name="패널 수정")
     @app_commands.checks.has_permissions(administrator=True)
-    async def edit_panel(self, interaction: discord.Interaction, channel: discord.TextChannel, message_id: str):
-        try:
-            msg = await channel.fetch_message(int(message_id))
-            if msg.author != self.bot.user:
-                await interaction.response.send_message("❌ 제가 보낸 메시지만 수정할 수 있습니다.", ephemeral=True)
-                return
-            
-            await interaction.response.send_modal(EmbedModal(target_channel=channel, bot_user=self.bot.user, edit_msg=msg))
-            
-        except discord.NotFound:
-            await interaction.response.send_message("❌ 해당 메시지를 찾을 수 없습니다. ID를 확인해주세요.", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ 오류 발생: {e}", ephemeral=True)
+    async def edit_panel_context(self, interaction: discord.Interaction, message: discord.Message):
+        # 봇이 보낸 메시지인지 확인
+        if message.author != self.bot.user:
+            await interaction.response.send_message("❌ 제가 보낸 메시지만 수정할 수 있습니다.", ephemeral=True)
+            return
+
+        # 모달창 띄우기 (현재 채널, 봇, 대상 메시지 전달)
+        await interaction.response.send_modal(EmbedModal(target_channel=interaction.channel, bot_user=self.bot.user, edit_msg=message))
 
 async def setup(bot):
     await bot.add_cog(EmbedCog(bot))
