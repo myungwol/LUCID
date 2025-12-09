@@ -40,7 +40,7 @@ class Stats(commands.Cog):
             await interaction.response.send_message(f"✅ 설정은 저장됐지만, 이름 변경에 실패했습니다. (봇 권한을 확인해주세요)\n에러: {e}")
 
     # 3. [자동 반복] 10분(minutes=10)마다 실행되는 루프
-    @tasks.loop(minutes=10)
+    @tasks.loop(minutes=6)
     async def update_stats_loop(self):
         # 봇이 완전히 켜질 때까지 기다림
         await self.bot.wait_until_ready()
