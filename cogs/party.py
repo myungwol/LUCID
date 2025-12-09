@@ -17,10 +17,18 @@ class MainTopView(ui.View):
     async def recruit_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_message("🚧 **모집 기능**은 개발 중입니다!", ephemeral=True)
 
-    # 2. 프로필 (파란색)
+    # 2. 프로필 (파란색) -> 여기를 수정합니다!
     @ui.button(label="프로필", style=discord.ButtonStyle.primary, custom_id="party_profile_btn", emoji="👤")
     async def profile_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_message("🚧 **프로필 조회 기능**은 개발 중입니다!", ephemeral=True)
+        # 순환 참조 방지를 위해 함수 안에서 import 하거나, 
+        # profile.py가 이미 로드되었다면 해당 뷰를 가져옵니다.
+        # 가장 쉬운 방법: profile.py의 View를 가져와서 띄우기
+        
+        from cogs.profile import ProfileEditView
+        
+        # 현재 설정된 정보를 보여주면서 메뉴를 띄우면 더 좋습니다.
+        # (DB 조회를 여기서 할 수도 있지만, 일단 메뉴부터 띄웁니다)
+        await interaction.response.send_message("📝 **프로필 설정 메뉴**입니다.\n수정하고 싶은 항목을 선택해주세요.", view=ProfileEditView(), ephemeral=True)
 
     # 3. 블랙 (회색)
     @ui.button(label="블랙", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
