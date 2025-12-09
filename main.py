@@ -1,30 +1,50 @@
 import discord
 import os
 from dotenv import load_dotenv
+from supabase import create_client, Client
 
-# 1. 토큰 불러오기
+# 1. 환경변수 불러오기
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
-# 2. 봇 설정 (권한 설정)
+# 2. Supabase 연결
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# 3. 봇 설정
 intents = discord.Intents.default()
-intents.message_content = True  # 메시지 내용 읽기 권한 켜기
-
+intents.message_content = True
 client = discord.Client(intents=intents)
 
-# 3. 봇이 켜졌을 때
 @client.event
 async def on_ready():
     print(f'로그인 성공! {client.user} 봇이 준비되었습니다.')
 
-# 4. 메시지를 받았을 때
 @client.event
 async def on_message(message):
-    if message.author == client.user: # 자기가 쓴 글은 무시
+    if message.author == client.user:
         return
 
-    if message.content == '!테스트':
-        await message.channel.send('성공입니다! 봇이 작동하고 있어요. 🚀')
+    # DB에 저장하기
+    if message.content.startswith('!기록 '):
+        content = message.content[4:] # 명령어 뒤의 내용만 자름
+        # 'memo' 테이블의 'text' 컬럼에 데이터 넣기
+        data = supabase.table("memo").insert({"text": content}).execute()
+        await message.channel.send(f'✅ 저장 완료: {content}')
 
-# 5. 봇 실행
+    # DB에서 불러오기
+    if message.content == '!목록':
+        # 'memo' 테이블의 모든 데이터 가져오기
+        response = supabase.table("memo").select("*").execute()
+        data = response.data
+        
+        if not data:
+            await message.channel.send("저장된 메모가 없습니다.")
+        else:
+            result_text = "📜 **메모 목록**\n"
+            for item in data:
+                result_text += f"- {item['text']}\n"
+            await message.channel.send(result_text)
+
 client.run(TOKEN)
