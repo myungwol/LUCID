@@ -6,7 +6,6 @@ from discord import ui
 # 1. [팝업창] 모달 정의 (이전과 동일)
 class EmbedModal(ui.Modal):
     def __init__(self, target_channel: discord.TextChannel, bot_user, edit_msg: discord.Message = None):
-        # 모달창 제목 설정
         title_text = "임베드 패널 작성" if edit_msg is None else "임베드 패널 수정"
         super().__init__(title=title_text)
         
@@ -14,7 +13,6 @@ class EmbedModal(ui.Modal):
         self.bot_user = bot_user
         self.edit_msg = edit_msg
 
-        # 입력 항목들
         self.embed_title = ui.TextInput(
             label="제목 (비워두면 제목 없음)", 
             placeholder="제목을 입력하세요 (선택사항)", 
@@ -23,7 +21,7 @@ class EmbedModal(ui.Modal):
         self.embed_content = ui.TextInput(
             label="내용", 
             placeholder="내용을 입력하세요. (엔터로 줄바꿈 가능)", 
-            style=discord.TextStyle.paragraph, # 큰 입력창
+            style=discord.TextStyle.paragraph, 
             required=True
         )
         self.embed_color = ui.TextInput(
@@ -37,7 +35,6 @@ class EmbedModal(ui.Modal):
             required=False
         )
 
-        # 수정 모드일 경우, 기존 내용을 채워넣음
         if edit_msg and edit_msg.embeds:
             og_embed = edit_msg.embeds[0]
             if og_embed.title: self.embed_title.default = og_embed.title
@@ -49,7 +46,6 @@ class EmbedModal(ui.Modal):
         self.add_item(self.embed_color)
         self.add_item(self.embed_image)
 
-    # 색상 변환
     def get_color(self, color_str: str):
         color_map = {
             "빨강": discord.Color.red(), "red": discord.Color.red(),
@@ -67,18 +63,14 @@ class EmbedModal(ui.Modal):
             except: pass
         return discord.Color.brand_green()
 
-    # [전송/수정 버튼 클릭 시]
     async def on_submit(self, interaction: discord.Interaction):
         color = self.get_color(self.embed_color.value.strip())
         embed = discord.Embed(description=self.embed_content.value, color=color)
         
         if self.embed_title.value.strip():
             embed.title = self.embed_title.value
-            
         if self.embed_image.value.strip():
             embed.set_image(url=self.embed_image.value)
-
-        # 작성자(Footer) 없이 깔끔하게 전송
 
         try:
             if self.edit_msg:
@@ -91,28 +83,36 @@ class EmbedModal(ui.Modal):
             await interaction.response.send_message(f"❌ 오류 발생: {e}", ephemeral=True)
 
 
-# 2. [Cogs] 명령어 및 컨텍스트 메뉴 연결
+# 2. [Cogs] 명령어 및 컨텍스트 메뉴 연결 (수정된 부분 ⭐)
 class EmbedCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        
+        # [중요] Cog 안에서는 우클릭 메뉴를 이렇게 수동으로 등록해야 합니다.
+        self.ctx_menu = app_commands.ContextMenu(
+            name="패널 수정",
+            callback=self.edit_panel_context,
+        )
+        self.bot.tree.add_command(self.ctx_menu)
 
-    # (1) 생성은 슬래시 커맨드로 유지 (/패널작성)
+    # 봇이 꺼지거나 리로드될 때 메뉴를 삭제해줌 (중복 방지)
+    async def cog_unload(self):
+        self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
+
+    # [슬래시 커맨드] 생성용
     @app_commands.command(name="패널작성", description="입력창을 띄워 깔끔한 임베드 패널을 작성합니다.")
     @app_commands.describe(channel="패널을 보낼 채널")
     @app_commands.checks.has_permissions(administrator=True)
     async def create_panel(self, interaction: discord.Interaction, channel: discord.TextChannel):
         await interaction.response.send_modal(EmbedModal(target_channel=channel, bot_user=self.bot.user))
 
-    # (2) 수정은 우클릭 메뉴로 변경 (Context Menu)
-    @app_commands.context_menu(name="패널 수정")
+    # [우클릭 메뉴 함수] (데코레이터 없이 함수만 정의)
     @app_commands.checks.has_permissions(administrator=True)
     async def edit_panel_context(self, interaction: discord.Interaction, message: discord.Message):
-        # 봇이 보낸 메시지인지 확인
         if message.author != self.bot.user:
             await interaction.response.send_message("❌ 제가 보낸 메시지만 수정할 수 있습니다.", ephemeral=True)
             return
 
-        # 모달창 띄우기 (현재 채널, 봇, 대상 메시지 전달)
         await interaction.response.send_modal(EmbedModal(target_channel=interaction.channel, bot_user=self.bot.user, edit_msg=message))
 
 async def setup(bot):
