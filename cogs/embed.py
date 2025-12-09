@@ -59,13 +59,12 @@ class EmbedModal(ui.Modal):
             "노랑": discord.Color.gold(), "yellow": discord.Color.gold(),
             "검정": discord.Color.default(), "black": discord.Color.default(),
             "보라": discord.Color.purple(), "purple": discord.Color.purple(),
+            "흰색": discord.Color.from_rgb(255, 255, 255), "white": discord.Color.from_rgb(255, 255, 255),
         }
         
-        # 1. 한글/영어 이름 확인
         if color_str in color_map:
             return color_map[color_str]
         
-        # 2. 헥사 코드 (#FFFFFF) 확인
         if color_str.startswith("#"):
             try:
                 return discord.Color.from_str(color_str)
@@ -88,7 +87,7 @@ class EmbedModal(ui.Modal):
         if self.embed_image.value.strip():
             embed.set_image(url=self.embed_image.value)
 
-        embed.set_footer(text=f"작성자: {interaction.user.name}", icon_url=interaction.user.display_avatar.url)
+        # ❌ 작성자(footer) 넣는 코드를 삭제했습니다.
 
         try:
             if self.edit_msg:
@@ -112,7 +111,6 @@ class EmbedCog(commands.Cog):
     @app_commands.describe(channel="패널을 보낼 채널")
     @app_commands.checks.has_permissions(administrator=True)
     async def create_panel(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        # 모달창 띄우기
         await interaction.response.send_modal(EmbedModal(target_channel=channel, bot_user=self.bot.user))
 
     @app_commands.command(name="패널수정", description="기존 패널 내용을 수정합니다.")
@@ -125,7 +123,6 @@ class EmbedCog(commands.Cog):
                 await interaction.response.send_message("❌ 제가 보낸 메시지만 수정할 수 있습니다.", ephemeral=True)
                 return
             
-            # 모달창 띄우기 (기존 메시지 정보를 같이 넘김)
             await interaction.response.send_modal(EmbedModal(target_channel=channel, bot_user=self.bot.user, edit_msg=msg))
             
         except discord.NotFound:
