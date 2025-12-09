@@ -89,7 +89,7 @@ class RecruitAcceptView(ui.View):
 
 
 # ==========================================
-# 2. [채널 뷰] 신청하기 버튼
+# 2. [채널 뷰] 신청하기 버튼 (쉐도우 밴 완벽 구현)
 # ==========================================
 class RecruitApplyView(ui.View):
     def __init__(self, bot, host_id: int):
@@ -115,18 +115,16 @@ class RecruitApplyView(ui.View):
                 await interaction.response.send_message("❌ 모집자를 찾을 수 없습니다.", ephemeral=True)
                 return
 
-        # 2. 블랙리스트 체크 & 쉐도우 밴
-        blk_res = supabase.table("personal_blacklists").select("*").eq("user_id", self.host_id).eq("target_id", interaction.user.id).execute()
-        if blk_res.data:
-            # 차단당했지만 성공 메시지만 보임 (DM 안 감)
-            await interaction.response.send_message(f"✅ **{host.name}**님에게 신청을 보냈습니다!", ephemeral=True)
-            return
-
-        # 3. 중복/재신청 체크
+        # 2. [중요] 중복/재신청 체크 (차단된 상태 포함)
+        # blocked 상태도 'pending'처럼 취급하여 "이미 신청했습니다"를 띄움
         hist_res = supabase.table("party_applications").select("*").eq("host_id", self.host_id).eq("applicant_id", interaction.user.id).execute()
+        
         if hist_res.data:
             status = hist_res.data[0]['status']
             if status == 'pending':
+                await interaction.response.send_message("⏳ 이미 신청을 보냈습니다.", ephemeral=True)
+                return
+            elif status == 'blocked': # 차단된 상태로 신청한 기록이 있을 때
                 await interaction.response.send_message("⏳ 이미 신청을 보냈습니다.", ephemeral=True)
                 return
             elif status == 'cancelled':
@@ -136,7 +134,22 @@ class RecruitApplyView(ui.View):
                 await interaction.response.send_message("✅ 이미 매칭된 상대입니다.", ephemeral=True)
                 return
 
-        # 4. 정상 신청
+        # 3. 블랙리스트 체크 & 쉐도우 밴
+        blk_res = supabase.table("personal_blacklists").select("*").eq("user_id", self.host_id).eq("target_id", interaction.user.id).execute()
+        
+        if blk_res.data:
+            # ✅ 차단됨: DB에 'blocked' 상태로 저장하고 성공 메시지 출력 (DM은 안 보냄)
+            insert_data = {
+                "host_id": self.host_id, 
+                "applicant_id": interaction.user.id, 
+                "status": "blocked" # 특수 상태
+            }
+            supabase.table("party_applications").insert(insert_data).execute()
+            
+            await interaction.response.send_message(f"✅ **{host.name}**님에게 신청을 보냈습니다!", ephemeral=True)
+            return 
+
+        # 4. 정상 신청 (차단 안됨)
         try:
             embed = discord.Embed(
                 title="💌 파티 신청 도착!",
@@ -164,7 +177,7 @@ class RecruitApplyView(ui.View):
 
 
 # ==========================================
-# 3. [모달/뷰] 블랙리스트 (토글 기능 적용됨)
+# 3. [모달/뷰] 블랙리스트 (토글)
 # ==========================================
 class BlacklistUserSelect(ui.UserSelect):
     def __init__(self):
@@ -180,15 +193,13 @@ class BlacklistUserSelect(ui.UserSelect):
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
         
-        # 1. 이미 차단 여부 확인
+        # 토글 로직
         res = supabase.table("personal_blacklists").select("*").eq("user_id", interaction.user.id).eq("target_id", target.id).execute()
         
         if res.data:
-            # 2-A. 이미 차단됨 -> 해제 (삭제)
             supabase.table("personal_blacklists").delete().eq("user_id", interaction.user.id).eq("target_id", target.id).execute()
             await interaction.response.send_message(f"🔓 **{target.name}**님의 차단을 **해제**했습니다.", ephemeral=True)
         else:
-            # 2-B. 차단 안됨 -> 차단 (추가)
             supabase.table("personal_blacklists").insert({"user_id": interaction.user.id, "target_id": target.id}).execute()
             await interaction.response.send_message(f"🚫 **{target.name}**님을 **차단**했습니다.\n이제 이 유저는 나에게 신청을 보낼 수 없습니다.", ephemeral=True)
 
@@ -199,7 +210,7 @@ class BlacklistView(ui.View):
 
 
 # ==========================================
-# 4. [뷰] 모집글 작성 (멘션 포함)
+# 4. [뷰] 모집글 작성
 # ==========================================
 class RecruitSelectView(ui.View):
     def __init__(self, bot, settings, user_profile):
@@ -225,7 +236,6 @@ class RecruitSelectView(ui.View):
             await interaction.response.send_message("❌ 채널 오류", ephemeral=True)
             return
 
-        # 멘션
         recruit_role_id = self.settings.get('recruit_role_id')
         mention_text = f"<@&{recruit_role_id}>" if recruit_role_id else ""
 
@@ -311,10 +321,9 @@ class MainTopView(ui.View):
         from cogs.profile import ProfileEditView
         await interaction.response.send_message("📝 **프로필 설정**", view=ProfileEditView(), ephemeral=True)
 
-    # 이름 변경됨: 블랙 -> 블랙/해제
     @ui.button(label="블랙/해제", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
     async def blacklist_btn(self, interaction: discord.Interaction, button: ui.Button):
-        await interaction.response.send_message("🚫 **차단/해제 관리**\n유저를 선택하면 차단하거나 차단을 해제합니다.", view=BlacklistView(), ephemeral=True)
+        await interaction.response.send_message("🚫 **차단/해제 관리**", view=BlacklistView(), ephemeral=True)
 
 
 class MainBottomView(ui.View):
@@ -353,6 +362,7 @@ class MainBottomView(ui.View):
         except Exception as e:
             await interaction.followup.send(f"❌ 오류: {e}", ephemeral=True)
 
+    # 신청 삭제 (blocked 상태도 함께 취소 처리)
     @ui.button(label="신청 삭제", style=discord.ButtonStyle.secondary, custom_id="party_cancel_apply_btn", emoji="✖️")
     async def cancel_apply_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -361,15 +371,19 @@ class MainBottomView(ui.View):
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
 
-        res = supabase.table("party_applications").select("*").eq("applicant_id", interaction.user.id).eq("status", "pending").execute()
+        # pending 또는 blocked 상태인 신청 조회 (in_ 필터 사용)
+        res = supabase.table("party_applications").select("*").eq("applicant_id", interaction.user.id).in_("status", ["pending", "blocked"]).execute()
+        
         if not res.data:
             await interaction.followup.send("❌ 취소할 대기 중인 신청이 없습니다.", ephemeral=True)
             return
 
         count = 0
         for app in res.data:
+            # 1. 상태 취소로 변경
             supabase.table("party_applications").update({"status": "cancelled"}).eq("id", app['id']).execute()
             
+            # 2. DM 삭제 (blocked 상태는 dm_message_id가 비어있을 수 있으므로 체크)
             host_id = app['host_id']
             dm_msg_id = app.get('dm_message_id')
             
@@ -378,10 +392,10 @@ class MainBottomView(ui.View):
                     host = await self.bot.fetch_user(host_id)
                     dm_channel = host.dm_channel or await host.create_dm()
                     msg = await dm_channel.fetch_message(dm_msg_id)
-                    await msg.delete() # DM 삭제
-                    count += 1
+                    await msg.delete()
                 except:
                     pass
+            count += 1
         
         await interaction.followup.send(f"✅ 총 **{count}**건의 신청을 철회했습니다.", ephemeral=True)
 
