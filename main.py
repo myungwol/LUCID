@@ -1,6 +1,7 @@
 import discord
 import os
 from dotenv import load_dotenv
+from discord import app_commands
 from supabase import create_client, Client
 
 # 1. 환경변수 불러오기
@@ -9,42 +10,37 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
-# 2. Supabase 연결
+# 2. Supabase 연결 (나중에 기능을 만들 때 쓰기 위해 연결만 해둠)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 3. 봇 설정
+# 3. 봇 설정 (CommandTree가 슬래시 커맨드를 관리함)
 intents = discord.Intents.default()
-intents.message_content = True
 client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
+# 4. 봇이 켜졌을 때 (명령어 동기화)
 @client.event
 async def on_ready():
+    # 슬래시 커맨드를 디스코드 서버에 등록하는 과정
+    await tree.sync() 
     print(f'로그인 성공! {client.user} 봇이 준비되었습니다.')
+    print('슬래시 커맨드 동기화 완료!')
 
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
+# ==========================================
+# 👇 여기부터 슬래시 커맨드 정의
+# ==========================================
 
-    # DB에 저장하기
-    if message.content.startswith('!기록 '):
-        content = message.content[4:] # 명령어 뒤의 내용만 자름
-        # 'memo' 테이블의 'text' 컬럼에 데이터 넣기
-        data = supabase.table("memo").insert({"text": content}).execute()
-        await message.channel.send(f'✅ 저장 완료: {content}')
+# 예시 1: 간단한 인사 커맨드
+@tree.command(name="안녕", description="봇이 반갑게 인사를 해줍니다.")
+async def hello(interaction: discord.Interaction):
+    # interaction.response.send_message가 답장하는 함수입니다.
+    await interaction.response.send_message(f"안녕하세요, {interaction.user.name}님! 슬래시 커맨드로 바뀌었어요. 😎")
 
-    # DB에서 불러오기
-    if message.content == '!목록':
-        # 'memo' 테이블의 모든 데이터 가져오기
-        response = supabase.table("memo").select("*").execute()
-        data = response.data
-        
-        if not data:
-            await message.channel.send("저장된 메모가 없습니다.")
-        else:
-            result_text = "📜 **메모 목록**\n"
-            for item in data:
-                result_text += f"- {item['text']}\n"
-            await message.channel.send(result_text)
+# 예시 2: 메아리 커맨드 (입력값을 받는 예시)
+@tree.command(name="따라해", description="내가 입력한 말을 그대로 따라합니다.")
+@app_commands.describe(message="따라할 말을 입력하세요") # 입력창 설명
+async def echo(interaction: discord.Interaction, message: str):
+    await interaction.response.send_message(f"📢 봇: {message}")
 
+# 봇 실행
 client.run(TOKEN)
