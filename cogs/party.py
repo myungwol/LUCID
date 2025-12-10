@@ -91,7 +91,7 @@ class RecruitAcceptView(ui.View):
 
 
 # ==========================================
-# 2. [채널 뷰] 신청하기 버튼
+# 2. [채널 뷰] 신청하기 버튼 (수정됨: 모집 주기 체크)
 # ==========================================
 class RecruitApplyView(ui.View):
     def __init__(self, bot, host_id: int):
@@ -109,10 +109,18 @@ class RecruitApplyView(ui.View):
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
 
+        # 1. 내 프로필 확인
         profile_res = supabase.table("user_profiles").select("user_id").eq("user_id", interaction.user.id).execute()
         if not profile_res.data:
             await interaction.response.send_message("❌ **프로필이 없습니다!**\n먼저 `/메인패널`의 `프로필` 버튼을 눌러 정보를 등록해주세요.", ephemeral=True)
             return
+
+        # 2. 호스트 정보(마지막 모집 시간) 가져오기
+        host_profile_res = supabase.table("user_profiles").select("last_recruit_at").eq("user_id", self.host_id).execute()
+        host_last_recruit = None
+        if host_profile_res.data and host_profile_res.data[0]['last_recruit_at']:
+            # '2023-12-10T00:00:00+00:00' 형식 파싱
+            host_last_recruit = datetime.fromisoformat(host_profile_res.data[0]['last_recruit_at'].replace('Z', '+00:00'))
 
         host = self.bot.get_user(self.host_id)
         if not host:
@@ -121,25 +129,41 @@ class RecruitApplyView(ui.View):
                 await interaction.response.send_message("❌ 모집자를 찾을 수 없습니다.", ephemeral=True)
                 return
 
-        hist_res = supabase.table("party_applications").select("*").eq("host_id", self.host_id).eq("applicant_id", interaction.user.id).execute()
+        # 3. [핵심 수정] 중복/취소 체크 (이번 모집 세션인지 확인)
+        # created_at 기준 내림차순 정렬 -> 가장 최근 신청 1개만 확인
+        hist_res = supabase.table("party_applications").select("*").eq("host_id", self.host_id).eq("applicant_id", interaction.user.id).order("created_at", desc=True).limit(1).execute()
+        
         if hist_res.data:
-            status = hist_res.data[0]['status']
-            if status in ['pending', 'blocked']:
-                await interaction.response.send_message("⏳ 이미 신청을 보냈습니다.", ephemeral=True)
-                return
-            elif status == 'cancelled':
-                await interaction.response.send_message("❌ 취소한 내역이 있어 다시 신청할 수 없습니다.", ephemeral=True)
-                return
-            elif status in ['accepted', 'closed']:
-                await interaction.response.send_message("❌ 이미 매칭되었거나 마감된 모집입니다.", ephemeral=True)
-                return
+            latest_app = hist_res.data[0]
+            status = latest_app['status']
+            app_created_at = datetime.fromisoformat(latest_app['created_at'].replace('Z', '+00:00'))
 
+            # "내 신청 기록"이 "호스트의 마지막 모집 시간"보다 나중이거나 같으면 -> 이번 모집에 대한 기록임
+            # (만약 이전 모집 때 취소했다면 app_created_at < host_last_recruit 일 테니 이 조건문에 걸리지 않음)
+            is_current_session = True
+            if host_last_recruit and app_created_at < host_last_recruit:
+                is_current_session = False
+            
+            # 이번 세션의 기록일 때만 차단
+            if is_current_session:
+                if status in ['pending', 'blocked']:
+                    await interaction.response.send_message("⏳ 이미 신청을 보냈습니다.", ephemeral=True)
+                    return
+                elif status == 'cancelled':
+                    await interaction.response.send_message("❌ 이번 모집은 취소한 내역이 있어 다시 신청할 수 없습니다.", ephemeral=True)
+                    return
+                elif status in ['accepted', 'closed']:
+                    await interaction.response.send_message("❌ 이미 매칭되었거나 마감된 모집입니다.", ephemeral=True)
+                    return
+
+        # 4. 블랙리스트 체크
         blk_res = supabase.table("personal_blacklists").select("*").eq("user_id", self.host_id).eq("target_id", interaction.user.id).execute()
         if blk_res.data:
             supabase.table("party_applications").insert({"host_id": self.host_id, "applicant_id": interaction.user.id, "status": "blocked"}).execute()
             await interaction.response.send_message(f"✅ **{host.name}**님에게 신청을 보냈습니다!", ephemeral=True)
             return 
 
+        # 5. 정상 신청 진행
         try:
             embed = discord.Embed(
                 title="💌 파티 신청 도착!",
@@ -254,7 +278,6 @@ class GameRoleButton(ui.Button):
             await interaction.response.send_message("❌ 해당 역할을 서버에서 찾을 수 없습니다.", ephemeral=True)
             return
 
-        # 토글 로직
         if role in interaction.user.roles:
             await interaction.user.remove_roles(role)
             await interaction.response.send_message(f"🗑️ **{role.name}** 역할을 제거했습니다.", ephemeral=True)
@@ -400,7 +423,6 @@ class MainTopView(ui.View):
         from cogs.profile import ProfileEditView
         await interaction.response.send_message("📝 **프로필 설정**", view=ProfileEditView(), ephemeral=True)
 
-    # [수정됨] 이름: 게임역할 / 행동: 버튼 리스트 출력 (공백 메시지)
     @ui.button(label="게임역할", style=discord.ButtonStyle.primary, custom_id="party_game_select_btn", emoji="🎮")
     async def game_select_btn(self, interaction: discord.Interaction, button: ui.Button):
         url = os.getenv('SUPABASE_URL')
@@ -410,7 +432,6 @@ class MainTopView(ui.View):
         if not res.data:
             await interaction.response.send_message("❌ 등록된 게임 역할이 없습니다.", ephemeral=True)
             return
-        # 투명 메시지와 함께 버튼 뷰 전송
         await interaction.response.send_message("\u200b", view=GameRoleButtonView(res.data), ephemeral=True)
 
     @ui.button(label="블랙/해제", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
