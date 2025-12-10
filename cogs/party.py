@@ -220,23 +220,18 @@ class GameRecruitSelect(ui.Select):
             return
         
         selected_game_name = self.values[0]
-        # 해당 게임의 역할 ID 찾기 (멘션용)
         selected_role_id = None
         for game in self.games:
             if game['name'] == selected_game_name:
                 selected_role_id = game['role_id']
                 break
         
-        # 게임 모집 채널 ID 가져오기
         target_id = self.parent_view.settings.get('channel_game_recruit')
         if not target_id:
              await interaction.response.send_message("❌ **게임 모집 채널**이 설정되지 않았습니다. 관리자에게 문의하세요.", ephemeral=True)
              return
 
-        # 역할 멘션 + 제목
         role_mention = f"<@&{selected_role_id}>" if selected_role_id else ""
-        
-        # send_recruit_msg 호출 (역할 멘션을 인자로 넘김)
         await self.parent_view.send_recruit_msg(interaction, target_id, f"[{selected_game_name}]", role_mention=role_mention)
 
 class GameRecruitView(ui.View):
@@ -246,7 +241,7 @@ class GameRecruitView(ui.View):
 
 
 # ==========================================
-# 5. [NEW] 게임 역할 받기 (멀티 드롭다운)
+# 5. [NEW] 게임 역할 받기 (수정됨: 선택한 것만 토글)
 # ==========================================
 class GameRoleSelect(ui.Select):
     def __init__(self, games):
@@ -254,12 +249,10 @@ class GameRoleSelect(ui.Select):
         options = []
         for game in games:
             emoji = game['emoji'] if game['emoji'] else "🎮"
-            # value에 role_id를 넣어서 처리
             options.append(discord.SelectOption(label=game['name'], emoji=emoji, value=str(game['role_id'])))
 
-        # min_values=0 (아무것도 선택 안하면 해제), max_values=개수
         super().__init__(
-            placeholder="받고 싶은 게임 역할을 모두 선택하세요 (중복 가능)", 
+            placeholder="받을 역할(추가)이나 뺄 역할(삭제)을 선택하세요", 
             min_values=0, 
             max_values=len(options), 
             options=options
@@ -270,29 +263,39 @@ class GameRoleSelect(ui.Select):
         
         selected_role_ids = [int(val) for val in self.values]
         
-        # 관리되는 모든 게임 역할 ID 목록
-        all_game_role_ids = [g['role_id'] for g in self.games]
-
         to_add = []
         to_remove = []
 
-        for role_id in all_game_role_ids:
+        # [중요] 선택된 항목들만 확인합니다. (선택 안 된 것은 건드리지 않음)
+        for role_id in selected_role_ids:
             role = interaction.guild.get_role(role_id)
             if not role: continue
             
-            # 선택된 목록에 있는데 유저가 없으면 -> 추가
-            if role_id in selected_role_ids and role not in interaction.user.roles:
-                to_add.append(role)
-            # 선택된 목록에 없는데 유저가 있으면 -> 삭제
-            elif role_id not in selected_role_ids and role in interaction.user.roles:
+            # 이미 있으면 -> 제거 (토글)
+            if role in interaction.user.roles:
                 to_remove.append(role)
+            # 없으면 -> 추가
+            else:
+                to_add.append(role)
         
+        # 역할 적용
         if to_add:
             await interaction.user.add_roles(*to_add)
         if to_remove:
             await interaction.user.remove_roles(*to_remove)
 
-        await interaction.followup.send(f"✅ 역할 업데이트 완료! (추가: {len(to_add)}개, 삭제: {len(to_remove)}개)", ephemeral=True)
+        # 결과 메시지
+        msg = []
+        if to_add: msg.append(f"✅ **추가됨**: {', '.join([r.name for r in to_add])}")
+        if to_remove: msg.append(f"🗑️ **제거됨**: {', '.join([r.name for r in to_remove])}")
+        
+        if not msg:
+            final_msg = "ℹ️ 선택된 역할이 없어 변동 사항이 없습니다."
+        else:
+            final_msg = "\n".join(msg)
+            final_msg += "\n(선택하지 않은 역할은 변경되지 않았습니다)"
+
+        await interaction.followup.send(final_msg, ephemeral=True)
 
 class GameRoleView(ui.View):
     def __init__(self, games):
@@ -301,7 +304,7 @@ class GameRoleView(ui.View):
 
 
 # ==========================================
-# 6. [뷰] 모집글 작성 (수정됨: 공백 처리, Footer 삭제, 멘션 처리)
+# 6. [뷰] 모집글 작성
 # ==========================================
 class RecruitSelectView(ui.View):
     def __init__(self, bot, settings, user_profile):
@@ -310,9 +313,7 @@ class RecruitSelectView(ui.View):
         self.settings = settings
         self.profile = user_profile
 
-    # role_mention 인자 추가
     async def send_recruit_msg(self, interaction: discord.Interaction, target_channel_id: int, tag: str, role_mention: str = None):
-        # 쿨타임
         last_str = self.profile.get('last_recruit_at')
         if last_str:
             last = datetime.fromisoformat(last_str.replace('Z', '+00:00'))
@@ -328,17 +329,15 @@ class RecruitSelectView(ui.View):
             await interaction.response.send_message("❌ 채널 오류", ephemeral=True)
             return
 
-        # 멘션 텍스트 결정 (게임 모집이면 해당 역할, 아니면 기본 모집 역할)
         if role_mention:
             final_mention = role_mention
         else:
             default_role_id = self.settings.get('recruit_role_id')
             final_mention = f"<@&{default_role_id}>" if default_role_id else ""
 
-        # [수정] 한마디 공백 처리
         bio = self.profile.get('bio')
         if not bio or str(bio).lower() == 'none':
-            bio_display = "\u200b" # 빈 공백 문자
+            bio_display = "\u200b"
         else:
             bio_display = f"```{bio}```"
 
@@ -350,7 +349,6 @@ class RecruitSelectView(ui.View):
             f"**🎙️ 목소리** : {self.profile.get('voice_pitch', '미설정')}\n\n"
             f"**📝 한마디**\n{bio_display}"
         )
-        # [수정] Footer 삭제 (기본값인 None이 들어가면 안 보임)
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
 
         try:
@@ -435,20 +433,16 @@ class MainTopView(ui.View):
         from cogs.profile import ProfileEditView
         await interaction.response.send_message("📝 **프로필 설정**", view=ProfileEditView(), ephemeral=True)
 
-    # [NEW] 게임 역할 받기 버튼 (프로필 옆에 위치)
     @ui.button(label="게임선택", style=discord.ButtonStyle.primary, custom_id="party_game_select_btn", emoji="🎮")
     async def game_select_btn(self, interaction: discord.Interaction, button: ui.Button):
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
-        
-        # DB에서 게임 목록 가져오기
         res = supabase.table("game_roles").select("*").eq("guild_id", interaction.guild_id).execute()
         if not res.data:
             await interaction.response.send_message("❌ 등록된 게임 역할이 없습니다.", ephemeral=True)
             return
-            
-        await interaction.response.send_message("🎮 **보유할 게임 역할을 선택하세요 (중복 가능):**", view=GameRoleView(res.data), ephemeral=True)
+        await interaction.response.send_message("🎮 **보유할 게임 역할을 선택하세요 (중복 가능):**\n(선택하면 추가되고, 이미 있으면 제거됩니다. 선택하지 않은 역할은 유지됩니다)", view=GameRoleView(res.data), ephemeral=True)
 
     @ui.button(label="블랙/해제", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
     async def blacklist_btn(self, interaction: discord.Interaction, button: ui.Button):
@@ -465,7 +459,6 @@ class MainBottomView(ui.View):
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
-        
         res = supabase.table("party_recruits").select("*").eq("user_id", interaction.user.id).execute()
         if not res.data:
             await interaction.followup.send("❌ 삭제할 모집글이 없습니다.", ephemeral=True)
@@ -533,18 +526,10 @@ class PartyCog(commands.Cog):
         await channel.send("\u200b", view=MainBottomView(self.bot))
         await interaction.response.send_message("✅ 패널 생성 완료", ephemeral=True)
 
-    # [수정됨] 모집설정 명령어에 game_channel 인자 추가
-    @app_commands.command(name="모집설정", description="모집 시스템에 필요한 역할과 채널을 설정합니다.")
-    @app_commands.describe(
-        recruit_role="모집 알림 역할", male_role="남자 역할", female_role="여자 역할",
-        mixed_channel="전체 구인 채널", male_channel="남성 구인 채널", female_channel="여성 구인 채널",
-        game_channel="게임 구인 전용 채널 (NEW)"
-    )
+    @app_commands.command(name="모집설정", description="모집 시스템 설정")
+    @app_commands.describe(recruit_role="모집 알림 역할", male_role="남자 역할", female_role="여자 역할", mixed_channel="전체 구인 채널", male_channel="남성 구인 채널", female_channel="여성 구인 채널", game_channel="게임 구인 전용 채널")
     @app_commands.checks.has_permissions(administrator=True)
-    async def set_recruit_settings(self, interaction: discord.Interaction,
-                                   recruit_role: discord.Role, male_role: discord.Role, female_role: discord.Role,
-                                   mixed_channel: discord.TextChannel, male_channel: discord.TextChannel, female_channel: discord.TextChannel,
-                                   game_channel: discord.TextChannel):
+    async def set_recruit_settings(self, interaction: discord.Interaction, recruit_role: discord.Role, male_role: discord.Role, female_role: discord.Role, mixed_channel: discord.TextChannel, male_channel: discord.TextChannel, female_channel: discord.TextChannel, game_channel: discord.TextChannel):
         data = {
             "guild_id": interaction.guild_id,
             "recruit_role_id": recruit_role.id,
@@ -558,26 +543,19 @@ class PartyCog(commands.Cog):
         self.supabase.table("server_settings").upsert(data).execute()
         await interaction.response.send_message(f"✅ 모집 설정 저장 완료!\n게임 모집 채널: {game_channel.mention}", ephemeral=True)
 
-    # 게임 역할 관련 명령어
-    @app_commands.command(name="게임추가", description="게임 역할 패널에 넣을 게임과 역할을 등록합니다.")
-    @app_commands.describe(role="지급할 역할", name="게임 이름 (예: LoL)", emoji="버튼에 넣을 이모지 (선택)")
+    @app_commands.command(name="게임추가", description="게임 역할 등록")
+    @app_commands.describe(role="지급할 역할", name="게임 이름", emoji="이모지")
     @app_commands.checks.has_permissions(administrator=True)
     async def add_game_role(self, interaction: discord.Interaction, role: discord.Role, name: str, emoji: str = "🎮"):
-        data = {
-            "guild_id": interaction.guild_id,
-            "role_id": role.id,
-            "name": name,
-            "emoji": emoji
-        }
-        self.supabase.table("game_roles").insert(data).execute()
-        await interaction.response.send_message(f"✅ **{name}** 게임 역할({role.mention})이 등록되었습니다!", ephemeral=True)
+        self.supabase.table("game_roles").insert({"guild_id": interaction.guild_id, "role_id": role.id, "name": name, "emoji": emoji}).execute()
+        await interaction.response.send_message(f"✅ **{name}** 등록 완료!", ephemeral=True)
 
-    @app_commands.command(name="게임삭제", description="등록된 게임 역할을 삭제합니다.")
+    @app_commands.command(name="게임삭제", description="게임 역할 삭제")
     @app_commands.describe(name="삭제할 게임 이름")
     @app_commands.checks.has_permissions(administrator=True)
     async def remove_game_role(self, interaction: discord.Interaction, name: str):
         self.supabase.table("game_roles").delete().eq("guild_id", interaction.guild_id).eq("name", name).execute()
-        await interaction.response.send_message(f"✅ **{name}** 게임이 삭제되었습니다.", ephemeral=True)
+        await interaction.response.send_message(f"✅ **{name}** 삭제 완료.", ephemeral=True)
 
     @tasks.loop(minutes=1)
     async def cleanup_voice_loop(self):
