@@ -7,7 +7,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 # ==========================================
-# 1. [DM 뷰] 수락 버튼 (중복 수락 방지 로직 추가됨)
+# 1. [DM 뷰] 수락 버튼 (기존 유지)
 # ==========================================
 class RecruitAcceptView(ui.View):
     def __init__(self, bot, guild_id: int, host: discord.User, applicant: discord.User, app_db_id: int):
@@ -26,33 +26,23 @@ class RecruitAcceptView(ui.View):
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
         
-        # 1. 현재 신청 상태 확인
         res = supabase.table("party_applications").select("status").eq("id", self.app_db_id).execute()
         if not res.data:
             await interaction.followup.send("❌ 찾을 수 없는 신청입니다.")
             return
 
         status = res.data[0]['status']
-        if status == 'cancelled':
-            await interaction.followup.send("❌ 신청자가 이미 취소한 요청입니다.")
+        if status in ['cancelled', 'closed', 'accepted']:
+            await interaction.followup.send(f"❌ 유효하지 않은 신청 상태입니다. ({status})")
             try: await interaction.message.delete()
             except: pass
             return
-        elif status == 'closed':
-            await interaction.followup.send("❌ 이미 다른 유저와 매칭되어 마감된 신청입니다.")
-            try: await interaction.message.delete()
-            except: pass
-            return
-        elif status == 'accepted':
-             await interaction.followup.send("✅ 이미 수락한 신청입니다.")
-             return
 
         guild = self.bot.get_guild(self.guild_id)
         if not guild:
             await interaction.followup.send("❌ 서버 정보를 찾을 수 없습니다.")
             return
 
-        # 2. 카테고리 찾기
         settings_res = supabase.table("server_settings").select("*").eq("guild_id", self.guild_id).execute()
         category = None
         if settings_res.data:
@@ -63,7 +53,6 @@ class RecruitAcceptView(ui.View):
                     category = base_channel.category
 
         try:
-            # 3. 방 생성
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(connect=False, view_channel=False),
                 guild.me: discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True),
@@ -72,62 +61,38 @@ class RecruitAcceptView(ui.View):
             }
 
             channel_name = f"💕｜{self.host.name}・{self.applicant.name}"
-            new_channel = await guild.create_voice_channel(
-                name=channel_name, 
-                category=category, 
-                overwrites=overwrites, 
-                reason="파티 매칭 성공"
-            )
+            new_channel = await guild.create_voice_channel(name=channel_name, category=category, overwrites=overwrites)
 
-            # 4. 현재 메시지 업데이트 (성공 표시)
             embed = interaction.message.embeds[0]
             embed.color = discord.Color.green()
             embed.set_footer(text="✅ 매칭 성공! 방이 생성되었습니다.")
             await interaction.edit_original_response(view=None, embed=embed)
             
-            # 5. 알림 전송
             await new_channel.send(f"🎉 **매칭 성공!**\n{self.host.mention}님, {self.applicant.mention}님 환영합니다!")
 
-            # 6. 신청자에게 DM
-            try:
-                await self.applicant.send(f"🎉 **{self.host.name}**님이 파티를 수락했습니다!\n서버의 **{new_channel.name}** 방으로 이동하세요.")
-            except:
-                pass
+            try: await self.applicant.send(f"🎉 **{self.host.name}**님이 파티를 수락했습니다!\n서버의 **{new_channel.name}** 방으로 이동하세요.")
+            except: pass
 
-            # 7. DB 업데이트 (현재 신청 건 수락 처리)
             supabase.table("party_applications").update({"status": "accepted"}).eq("id", self.app_db_id).execute()
 
-            # ====================================================
-            # 8. [추가됨] 다른 대기 중인 신청들 자동 삭제 (마감 처리)
-            # ====================================================
-            # 호스트의 다른 'pending' 상태 신청들을 가져옴
-            other_apps = supabase.table("party_applications").select("*")\
-                .eq("host_id", self.host.id).eq("status", "pending").neq("id", self.app_db_id).execute()
-            
+            # 중복 신청 정리
+            other_apps = supabase.table("party_applications").select("*").eq("host_id", self.host.id).eq("status", "pending").neq("id", self.app_db_id).execute()
             if other_apps.data:
                 for app in other_apps.data:
-                    # DB 상태 'closed'로 변경
                     supabase.table("party_applications").update({"status": "closed"}).eq("id", app['id']).execute()
-                    
-                    # DM 메시지 삭제
                     dm_msg_id = app.get('dm_message_id')
                     if dm_msg_id:
                         try:
-                            # interaction.channel은 호스트와의 DM 채널임
                             msg_to_delete = await interaction.channel.fetch_message(dm_msg_id)
                             await msg_to_delete.delete()
-                        except:
-                            pass
-                
-                # (선택) 호스트에게 정리되었다는 알림을 잠깐 보낼 수도 있음
-                # await interaction.followup.send("🧹 다른 대기 중인 신청들을 모두 정리했습니다.", ephemeral=True)
+                        except: pass
 
         except Exception as e:
             await interaction.followup.send(f"❌ 방 생성 실패: {e}")
 
 
 # ==========================================
-# 2. [채널 뷰] 신청하기 버튼 (프로필 체크 추가됨)
+# 2. [채널 뷰] 신청하기 버튼 (기존 유지)
 # ==========================================
 class RecruitApplyView(ui.View):
     def __init__(self, bot, host_id: int):
@@ -137,7 +102,6 @@ class RecruitApplyView(ui.View):
 
     @ui.button(label="신청하기", style=discord.ButtonStyle.primary, emoji="💌", custom_id="recruit_apply_btn_v3")
     async def apply_btn(self, interaction: discord.Interaction, button: ui.Button):
-        # 1. 자기 자신 체크
         if interaction.user.id == self.host_id:
             await interaction.response.send_message("❌ 자기 자신에게는 신청할 수 없습니다.", ephemeral=True)
             return
@@ -146,14 +110,11 @@ class RecruitApplyView(ui.View):
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
 
-        # 2. [추가됨] 신청자 프로필 존재 여부 확인
         profile_res = supabase.table("user_profiles").select("user_id").eq("user_id", interaction.user.id).execute()
         if not profile_res.data:
-            # 프로필이 없으면 차단
             await interaction.response.send_message("❌ **프로필이 없습니다!**\n먼저 `/메인패널`의 `프로필` 버튼을 눌러 정보를 등록해주세요.", ephemeral=True)
             return
 
-        # 3. 호스트 정보 가져오기
         host = self.bot.get_user(self.host_id)
         if not host:
             try: host = await self.bot.fetch_user(self.host_id)
@@ -161,36 +122,27 @@ class RecruitApplyView(ui.View):
                 await interaction.response.send_message("❌ 모집자를 찾을 수 없습니다.", ephemeral=True)
                 return
 
-        # 4. 중복/재신청 체크 (blocked 상태 포함)
+        # 중복 체크
         hist_res = supabase.table("party_applications").select("*").eq("host_id", self.host_id).eq("applicant_id", interaction.user.id).execute()
         if hist_res.data:
             status = hist_res.data[0]['status']
-            if status == 'pending':
+            if status in ['pending', 'blocked']:
                 await interaction.response.send_message("⏳ 이미 신청을 보냈습니다.", ephemeral=True)
-                return
-            elif status == 'blocked':
-                await interaction.response.send_message("⏳ 이미 신청을 보냈습니다.", ephemeral=True) # 쉐도우 밴 유지
                 return
             elif status == 'cancelled':
                 await interaction.response.send_message("❌ 취소한 내역이 있어 다시 신청할 수 없습니다.", ephemeral=True)
                 return
-            elif status == 'accepted':
-                await interaction.response.send_message("✅ 이미 매칭된 상대입니다.", ephemeral=True)
-                return
-            elif status == 'closed': # 다른 사람 수락으로 인해 마감된 경우
-                await interaction.response.send_message("❌ 이미 모집이 마감되었습니다.", ephemeral=True)
+            elif status in ['accepted', 'closed']:
+                await interaction.response.send_message("❌ 이미 매칭되었거나 마감된 모집입니다.", ephemeral=True)
                 return
 
-        # 5. 블랙리스트 체크 & 쉐도우 밴
+        # 쉐도우 밴
         blk_res = supabase.table("personal_blacklists").select("*").eq("user_id", self.host_id).eq("target_id", interaction.user.id).execute()
         if blk_res.data:
-            # 차단됨: DB에 blocked 저장 후 가짜 성공 메시지
-            insert_data = {"host_id": self.host_id, "applicant_id": interaction.user.id, "status": "blocked"}
-            supabase.table("party_applications").insert(insert_data).execute()
+            supabase.table("party_applications").insert({"host_id": self.host_id, "applicant_id": interaction.user.id, "status": "blocked"}).execute()
             await interaction.response.send_message(f"✅ **{host.name}**님에게 신청을 보냈습니다!", ephemeral=True)
             return 
 
-        # 6. 정상 신청 로직
         try:
             embed = discord.Embed(
                 title="💌 파티 신청 도착!",
@@ -218,7 +170,7 @@ class RecruitApplyView(ui.View):
 
 
 # ==========================================
-# 3. [모달/뷰] 블랙리스트 (토글)
+# 3. [모달/뷰] 블랙리스트
 # ==========================================
 class BlacklistUserSelect(ui.UserSelect):
     def __init__(self):
@@ -235,13 +187,12 @@ class BlacklistUserSelect(ui.UserSelect):
         supabase: Client = create_client(url, key)
         
         res = supabase.table("personal_blacklists").select("*").eq("user_id", interaction.user.id).eq("target_id", target.id).execute()
-        
         if res.data:
             supabase.table("personal_blacklists").delete().eq("user_id", interaction.user.id).eq("target_id", target.id).execute()
             await interaction.response.send_message(f"🔓 **{target.name}**님의 차단을 **해제**했습니다.", ephemeral=True)
         else:
             supabase.table("personal_blacklists").insert({"user_id": interaction.user.id, "target_id": target.id}).execute()
-            await interaction.response.send_message(f"🚫 **{target.name}**님을 **차단**했습니다.\n이제 이 유저는 나에게 신청을 보낼 수 없습니다.", ephemeral=True)
+            await interaction.response.send_message(f"🚫 **{target.name}**님을 **차단**했습니다.", ephemeral=True)
 
 class BlacklistView(ui.View):
     def __init__(self):
@@ -250,7 +201,42 @@ class BlacklistView(ui.View):
 
 
 # ==========================================
-# 4. [뷰] 모집글 작성
+# 4. [NEW] 게임 모집 선택용 드롭다운
+# ==========================================
+class GameRecruitSelect(ui.Select):
+    def __init__(self, games, parent_view):
+        self.parent_view = parent_view
+        options = []
+        # DB에서 가져온 게임 목록으로 옵션 생성
+        for game in games:
+            emoji = game['emoji'] if game['emoji'] else "🎮"
+            options.append(discord.SelectOption(label=game['name'], emoji=emoji, value=game['name']))
+        
+        if not options:
+            options.append(discord.SelectOption(label="등록된 게임 없음", value="none"))
+
+        super().__init__(placeholder="모집할 게임을 선택하세요", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.values[0] == "none":
+            await interaction.response.send_message("❌ 등록된 게임이 없습니다. 관리자에게 문의하세요.", ephemeral=True)
+            return
+        
+        # 선택한 게임 이름으로 모집글 전송
+        selected_game = self.values[0]
+        # 전체 구인 채널(channel_mixed)을 기본으로 사용
+        target_id = self.parent_view.settings.get('channel_mixed')
+        await self.parent_view.send_recruit_msg(interaction, target_id, f"[{selected_game}]")
+
+
+class GameRecruitView(ui.View):
+    def __init__(self, games, parent_view):
+        super().__init__()
+        self.add_item(GameRecruitSelect(games, parent_view))
+
+
+# ==========================================
+# 5. [뷰] 모집글 작성 (게임 버튼 추가됨)
 # ==========================================
 class RecruitSelectView(ui.View):
     def __init__(self, bot, settings, user_profile):
@@ -273,7 +259,7 @@ class RecruitSelectView(ui.View):
 
         channel = interaction.guild.get_channel(target_channel_id)
         if not channel:
-            await interaction.response.send_message("❌ 채널 오류", ephemeral=True)
+            await interaction.response.send_message("❌ 채널 설정 오류 (관리자 문의)", ephemeral=True)
             return
 
         recruit_role_id = self.settings.get('recruit_role_id')
@@ -313,29 +299,75 @@ class RecruitSelectView(ui.View):
         except Exception as e:
             await interaction.response.send_message(f"❌ 오류: {e}", ephemeral=True)
 
-    @ui.button(label="전체", style=discord.ButtonStyle.secondary, emoji="🌏")
+    @ui.button(label="전체", style=discord.ButtonStyle.secondary, emoji="🌏", row=0)
     async def recruit_all(self, interaction: discord.Interaction, button: ui.Button):
         await self.send_recruit_msg(interaction, self.settings.get('channel_mixed'), "[전체]")
 
-    @ui.button(label="동성", style=discord.ButtonStyle.primary, emoji="👫")
+    @ui.button(label="동성", style=discord.ButtonStyle.primary, emoji="👫", row=0)
     async def recruit_same(self, interaction: discord.Interaction, button: ui.Button):
         roles = [r.id for r in interaction.user.roles]
         male, female = self.settings.get('male_role_id'), self.settings.get('female_role_id')
         tid = self.settings.get('channel_male') if male in roles else self.settings.get('channel_female') if female in roles else None
         if tid: await self.send_recruit_msg(interaction, tid, "[동성]")
-        else: await interaction.response.send_message("❌ 설정 오류", ephemeral=True)
+        else: await interaction.response.send_message("❌ 성별/채널 설정 오류", ephemeral=True)
 
-    @ui.button(label="이성", style=discord.ButtonStyle.danger, emoji="💕")
+    @ui.button(label="이성", style=discord.ButtonStyle.danger, emoji="💕", row=0)
     async def recruit_opposite(self, interaction: discord.Interaction, button: ui.Button):
         roles = [r.id for r in interaction.user.roles]
         male, female = self.settings.get('male_role_id'), self.settings.get('female_role_id')
         tid = self.settings.get('channel_female') if male in roles else self.settings.get('channel_male') if female in roles else None
         if tid: await self.send_recruit_msg(interaction, tid, "[이성]")
-        else: await interaction.response.send_message("❌ 설정 오류", ephemeral=True)
+        else: await interaction.response.send_message("❌ 성별/채널 설정 오류", ephemeral=True)
+
+    # [NEW] 게임 모집 버튼
+    @ui.button(label="게임", style=discord.ButtonStyle.success, emoji="🎮", row=1)
+    async def recruit_game(self, interaction: discord.Interaction, button: ui.Button):
+        url = os.getenv('SUPABASE_URL')
+        key = os.getenv('SUPABASE_KEY')
+        supabase: Client = create_client(url, key)
+
+        # 게임 목록 가져오기
+        res = supabase.table("game_roles").select("*").eq("guild_id", interaction.guild_id).execute()
+        if not res.data:
+            await interaction.response.send_message("❌ 등록된 게임이 없습니다. (관리자가 `/게임추가` 필요)", ephemeral=True)
+            return
+
+        # 게임 선택 드롭다운 보여주기
+        await interaction.response.send_message("🎮 **모집할 게임을 선택해주세요:**", view=GameRecruitView(res.data, self), ephemeral=True)
 
 
 # ==========================================
-# 5. [메인 패널] 상단/하단
+# 6. [NEW] 게임 역할 지급 버튼 뷰
+# ==========================================
+class GameRoleButton(ui.Button):
+    def __init__(self, role_id, label, emoji):
+        super().__init__(style=discord.ButtonStyle.secondary, label=label, emoji=emoji, custom_id=f"game_role_{role_id}")
+        self.role_id = role_id
+
+    async def callback(self, interaction: discord.Interaction):
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            await interaction.response.send_message("❌ 해당 역할을 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(f"❌ **{role.name}** 역할을 제거했습니다.", ephemeral=True)
+        else:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ **{role.name}** 역할을 받았습니다!", ephemeral=True)
+
+class GameRoleView(ui.View):
+    def __init__(self, game_data_list):
+        super().__init__(timeout=None)
+        # DB에서 가져온 게임 목록만큼 버튼 생성
+        for game in game_data_list:
+            emoji = game['emoji'] if game['emoji'] else "🎮"
+            self.add_item(GameRoleButton(game['role_id'], game['name'], emoji))
+
+
+# ==========================================
+# 7. [메인 패널] 상단/하단
 # ==========================================
 class MainTopView(ui.View):
     def __init__(self, bot):
@@ -365,7 +397,6 @@ class MainTopView(ui.View):
     async def blacklist_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.send_message("🚫 **차단/해제 관리**", view=BlacklistView(), ephemeral=True)
 
-
 class MainBottomView(ui.View):
     def __init__(self, bot):
         self.bot = bot
@@ -374,11 +405,10 @@ class MainBottomView(ui.View):
     @ui.button(label="모집 삭제", style=discord.ButtonStyle.red, custom_id="party_delete_recruit_btn", emoji="🗑️")
     async def delete_recruit_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-        
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
-
+        
         res = supabase.table("party_recruits").select("*").eq("user_id", interaction.user.id).execute()
         if not res.data:
             await interaction.followup.send("❌ 삭제할 모집글이 없습니다.", ephemeral=True)
@@ -390,60 +420,49 @@ class MainBottomView(ui.View):
             if channel:
                 msg = await channel.fetch_message(rec['message_id'])
                 await msg.delete()
-                supabase.table("party_recruits").delete().eq("user_id", interaction.user.id).execute()
-                await interaction.followup.send("✅ 모집글을 삭제했습니다.", ephemeral=True)
-            else:
-                supabase.table("party_recruits").delete().eq("user_id", interaction.user.id).execute()
-                await interaction.followup.send("⚠️ 채널을 찾을 수 없어 DB 데이터만 정리했습니다.", ephemeral=True)
-
-        except discord.NotFound:
             supabase.table("party_recruits").delete().eq("user_id", interaction.user.id).execute()
-            await interaction.followup.send("✅ 이미 삭제된 글입니다.", ephemeral=True)
+            await interaction.followup.send("✅ 모집글을 삭제했습니다.", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"❌ 오류: {e}", ephemeral=True)
+            supabase.table("party_recruits").delete().eq("user_id", interaction.user.id).execute()
+            await interaction.followup.send("✅ (이미 삭제됨) DB 정리 완료.", ephemeral=True)
 
     @ui.button(label="신청 삭제", style=discord.ButtonStyle.secondary, custom_id="party_cancel_apply_btn", emoji="✖️")
     async def cancel_apply_btn(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
-
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
         supabase: Client = create_client(url, key)
-
-        # pending 또는 blocked 상태 체크
-        res = supabase.table("party_applications").select("*").eq("applicant_id", interaction.user.id).in_("status", ["pending", "blocked"]).execute()
         
+        res = supabase.table("party_applications").select("*").eq("applicant_id", interaction.user.id).in_("status", ["pending", "blocked"]).execute()
         if not res.data:
-            await interaction.followup.send("❌ 취소할 대기 중인 신청이 없습니다.", ephemeral=True)
+            await interaction.followup.send("❌ 취소할 신청이 없습니다.", ephemeral=True)
             return
 
         count = 0
         for app in res.data:
             supabase.table("party_applications").update({"status": "cancelled"}).eq("id", app['id']).execute()
-            
-            host_id = app['host_id']
             dm_msg_id = app.get('dm_message_id')
-            
             if dm_msg_id:
                 try:
-                    host = await self.bot.fetch_user(host_id)
+                    host = await self.bot.fetch_user(app['host_id'])
                     dm_channel = host.dm_channel or await host.create_dm()
                     msg = await dm_channel.fetch_message(dm_msg_id)
-                    await msg.delete() # DM 삭제
-                except:
-                    pass
+                    await msg.delete()
+                except: pass
             count += 1
-        
         await interaction.followup.send(f"✅ 총 **{count}**건의 신청을 철회했습니다.", ephemeral=True)
 
 
 # ==========================================
-# 6. [Cog] 메인 및 루프
+# 8. [Cog] 메인 및 루프
 # ==========================================
 class PartyCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.cleanup_voice_loop.start()
+        url = os.getenv('SUPABASE_URL')
+        key = os.getenv('SUPABASE_KEY')
+        self.supabase: Client = create_client(url, key)
 
     def cog_unload(self):
         self.cleanup_voice_loop.cancel()
@@ -459,6 +478,39 @@ class PartyCog(commands.Cog):
         await channel.send("\u200b", view=MainTopView(self.bot))
         await channel.send("\u200b", view=MainBottomView(self.bot))
         await interaction.response.send_message("✅ 패널 생성 완료", ephemeral=True)
+
+    # --- 게임 역할 관련 명령어 ---
+    @app_commands.command(name="게임추가", description="게임 역할 패널에 넣을 게임과 역할을 등록합니다.")
+    @app_commands.describe(role="지급할 역할", name="게임 이름 (예: LoL)", emoji="버튼에 넣을 이모지 (선택)")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def add_game_role(self, interaction: discord.Interaction, role: discord.Role, name: str, emoji: str = "🎮"):
+        data = {
+            "guild_id": interaction.guild_id,
+            "role_id": role.id,
+            "name": name,
+            "emoji": emoji
+        }
+        self.supabase.table("game_roles").insert(data).execute()
+        await interaction.response.send_message(f"✅ **{name}** 게임 역할({role.mention})이 등록되었습니다!", ephemeral=True)
+
+    @app_commands.command(name="게임삭제", description="등록된 게임 역할을 삭제합니다.")
+    @app_commands.describe(name="삭제할 게임 이름")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def remove_game_role(self, interaction: discord.Interaction, name: str):
+        self.supabase.table("game_roles").delete().eq("guild_id", interaction.guild_id).eq("name", name).execute()
+        await interaction.response.send_message(f"✅ **{name}** 게임이 삭제되었습니다.", ephemeral=True)
+
+    @app_commands.command(name="게임패널", description="유저들이 클릭해서 역할을 받을 수 있는 게임 버튼 패널을 생성합니다.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def send_game_panel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        res = self.supabase.table("game_roles").select("*").eq("guild_id", interaction.guild_id).execute()
+        if not res.data:
+            await interaction.response.send_message("❌ 등록된 게임이 없습니다. `/게임추가`를 먼저 해주세요.", ephemeral=True)
+            return
+        
+        embed = discord.Embed(title="🎮 게임 역할 선택", description="아래 버튼을 눌러 자신의 게임 역할을 선택하세요.\n(모집 시 해당 게임을 선택할 수 있습니다)", color=discord.Color.purple())
+        await channel.send(embed=embed, view=GameRoleView(res.data))
+        await interaction.response.send_message(f"✅ {channel.mention}에 게임 패널을 생성했습니다.", ephemeral=True)
 
     @tasks.loop(minutes=1)
     async def cleanup_voice_loop(self):
