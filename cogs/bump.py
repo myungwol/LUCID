@@ -59,7 +59,7 @@ class BumpCog(commands.Cog):
             is_success = False
             if message.embeds:
                 desc = message.embeds[0].description
-                if desc and ("Bumped successfully" in desc or "범프 성공" in desc):
+                if desc and ("서버 갱신 완료!" in desc or "범프 성공" in desc):
                     is_success = True
             
             if is_success:
@@ -69,11 +69,11 @@ class BumpCog(commands.Cog):
         # B. 코리안봇 (Koreanbot) / 디코올 감지
         # ID: 417015509743501314 (대표적인 한국 봇)
         # ---------------------------------------
-        elif message.author.id == 417015509743501314:
+        elif message.author.id == 664647740877176832:
             is_success = False
             if message.embeds:
                 title = message.embeds[0].title
-                if title and ("UP 했습니다" in title or "성공" in title):
+                if title and ("서버가 상단에 표시되었습니다. " in title or "성공" in title):
                     is_success = True
             
             if is_success:
