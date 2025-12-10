@@ -61,7 +61,7 @@ class BumpCog(commands.Cog):
             is_success = False
             if message.embeds:
                 desc = message.embeds[0].description
-                if desc and ("서버 갱신 완료!" in desc or "범프 성공" in desc):
+                if desc and ("서버 갱신 완료" in desc or "범프 성공" in desc):
                     is_success = True
             
             if is_success:
