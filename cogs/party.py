@@ -241,66 +241,33 @@ class GameRecruitView(ui.View):
 
 
 # ==========================================
-# 5. [NEW] 게임 역할 받기 (수정됨: 선택한 것만 토글)
+# 5. [NEW] 게임 역할 받기 (버튼 방식)
 # ==========================================
-class GameRoleSelect(ui.Select):
-    def __init__(self, games):
-        self.games = games
-        options = []
-        for game in games:
-            emoji = game['emoji'] if game['emoji'] else "🎮"
-            options.append(discord.SelectOption(label=game['name'], emoji=emoji, value=str(game['role_id'])))
-
-        super().__init__(
-            placeholder="받을 역할(추가)이나 뺄 역할(삭제)을 선택하세요", 
-            min_values=0, 
-            max_values=len(options), 
-            options=options
-        )
+class GameRoleButton(ui.Button):
+    def __init__(self, role_id, label, emoji):
+        super().__init__(style=discord.ButtonStyle.secondary, label=label, emoji=emoji)
+        self.role_id = role_id
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        
-        selected_role_ids = [int(val) for val in self.values]
-        
-        to_add = []
-        to_remove = []
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            await interaction.response.send_message("❌ 해당 역할을 서버에서 찾을 수 없습니다.", ephemeral=True)
+            return
 
-        # [중요] 선택된 항목들만 확인합니다. (선택 안 된 것은 건드리지 않음)
-        for role_id in selected_role_ids:
-            role = interaction.guild.get_role(role_id)
-            if not role: continue
-            
-            # 이미 있으면 -> 제거 (토글)
-            if role in interaction.user.roles:
-                to_remove.append(role)
-            # 없으면 -> 추가
-            else:
-                to_add.append(role)
-        
-        # 역할 적용
-        if to_add:
-            await interaction.user.add_roles(*to_add)
-        if to_remove:
-            await interaction.user.remove_roles(*to_remove)
-
-        # 결과 메시지
-        msg = []
-        if to_add: msg.append(f"✅ **추가됨**: {', '.join([r.name for r in to_add])}")
-        if to_remove: msg.append(f"🗑️ **제거됨**: {', '.join([r.name for r in to_remove])}")
-        
-        if not msg:
-            final_msg = "ℹ️ 선택된 역할이 없어 변동 사항이 없습니다."
+        # 토글 로직
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role)
+            await interaction.response.send_message(f"🗑️ **{role.name}** 역할을 제거했습니다.", ephemeral=True)
         else:
-            final_msg = "\n".join(msg)
-            final_msg += "\n(선택하지 않은 역할은 변경되지 않았습니다)"
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ **{role.name}** 역할을 받았습니다.", ephemeral=True)
 
-        await interaction.followup.send(final_msg, ephemeral=True)
-
-class GameRoleView(ui.View):
+class GameRoleButtonView(ui.View):
     def __init__(self, games):
         super().__init__(timeout=None)
-        self.add_item(GameRoleSelect(games))
+        for game in games:
+            emoji = game['emoji'] if game['emoji'] else "🎮"
+            self.add_item(GameRoleButton(game['role_id'], game['name'], emoji))
 
 
 # ==========================================
@@ -433,7 +400,8 @@ class MainTopView(ui.View):
         from cogs.profile import ProfileEditView
         await interaction.response.send_message("📝 **프로필 설정**", view=ProfileEditView(), ephemeral=True)
 
-    @ui.button(label="게임선택", style=discord.ButtonStyle.primary, custom_id="party_game_select_btn", emoji="🎮")
+    # [수정됨] 이름: 게임역할 / 행동: 버튼 리스트 출력 (공백 메시지)
+    @ui.button(label="게임역할", style=discord.ButtonStyle.primary, custom_id="party_game_select_btn", emoji="🎮")
     async def game_select_btn(self, interaction: discord.Interaction, button: ui.Button):
         url = os.getenv('SUPABASE_URL')
         key = os.getenv('SUPABASE_KEY')
@@ -442,7 +410,8 @@ class MainTopView(ui.View):
         if not res.data:
             await interaction.response.send_message("❌ 등록된 게임 역할이 없습니다.", ephemeral=True)
             return
-        await interaction.response.send_message("🎮 **보유할 게임 역할을 선택하세요 (중복 가능):**\n(선택하면 추가되고, 이미 있으면 제거됩니다. 선택하지 않은 역할은 유지됩니다)", view=GameRoleView(res.data), ephemeral=True)
+        # 투명 메시지와 함께 버튼 뷰 전송
+        await interaction.response.send_message("\u200b", view=GameRoleButtonView(res.data), ephemeral=True)
 
     @ui.button(label="블랙/해제", style=discord.ButtonStyle.secondary, custom_id="party_blacklist_btn", emoji="🚫")
     async def blacklist_btn(self, interaction: discord.Interaction, button: ui.Button):
