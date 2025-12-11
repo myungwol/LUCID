@@ -18,7 +18,7 @@ class BumpCog(commands.Cog):
         self.bump_check_loop.cancel()
 
     # ==========================================
-    # 1. [설정 명령어] 역할 & 채널 모두 분리
+    # 1. [설정 명령어]
     # ==========================================
     @app_commands.command(name="알림설정", description="범프/업 알림을 받을 역할과 채널을 각각 설정합니다.")
     @app_commands.describe(
@@ -34,9 +34,9 @@ class BumpCog(commands.Cog):
         data = {
             "guild_id": interaction.guild_id,
             "disboard_role_id": disboard_role.id,
-            "disboard_channel_id": disboard_channel.id,   # 분리됨
+            "disboard_channel_id": disboard_channel.id,
             "koreanbot_role_id": koreanbot_role.id,
-            "koreanbot_channel_id": koreanbot_channel.id  # 분리됨
+            "koreanbot_channel_id": koreanbot_channel.id
         }
         self.supabase.table("server_settings").upsert(data).execute()
         
@@ -49,65 +49,78 @@ class BumpCog(commands.Cog):
 
 
     # ==========================================
-    # 2. [이벤트 리스너] 성공 감지 & 삭제
+    # 2. [이벤트 리스너] 새 메시지 감지 (주로 디스보드)
     # ==========================================
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.id == self.bot.user.id: return
-        if not message.guild: return
+        if message.author.id == self.bot.user.id or not message.guild: return
 
         # A. 디스보드 (Disboard)
         if message.author.id == 302050872383242240:
-            is_success = False
-            if message.embeds:
-                desc = message.embeds[0].description
-                if desc and ("서버 갱신 완료" in desc or "범프 성공" in desc):
-                    is_success = True
-            
-            if is_success:
-                try: await message.delete()
-                except: pass
+            if self.check_disboard_success(message):
+                # 성공 메시지는 놔두고, 타이머 갱신 및 내 봇 알림만 삭제
                 await self.handle_success(message.guild.id, "disboard", 120)
 
         # B. 코리안봇 (Koreanbot)
         elif message.author.id == 664647740877176832:
-            is_success = False
-            if message.embeds:
-                title = message.embeds[0].title
-                if title and ("서버가 상단에 표시되었습니다." in title or "성공" in title):
-                    is_success = True
-            
-            if is_success:
-                try: await message.delete()
-                except: pass
+            if self.check_koreanbot_success(message):
                 await self.handle_success(message.guild.id, "koreanbot", 60)
 
 
-    # [공통] 멘션 삭제 & 타이머 갱신
+    # ==========================================
+    # 3. [이벤트 리스너] 메시지 수정 감지 (주로 코리안봇)
+    # ==========================================
+    @commands.Cog.listener()
+    async def on_message_edit(self, before: discord.Message, after: discord.Message):
+        if after.author.id == self.bot.user.id or not after.guild: return
+
+        # 코리안봇 (Koreanbot)
+        if after.author.id == 664647740877176832:
+            if self.check_koreanbot_success(after):
+                # 성공 메시지는 놔두고, 타이머 갱신 및 내 봇 알림만 삭제
+                await self.handle_success(after.guild.id, "koreanbot", 60)
+
+
+    # --- 성공 여부 판별 헬퍼 ---
+    def check_disboard_success(self, message: discord.Message) -> bool:
+        if message.embeds:
+            desc = message.embeds[0].description
+            if desc and ("서버 갱신 완료" in desc or "범프 성공" in desc):
+                return True
+        return False
+
+    def check_koreanbot_success(self, message: discord.Message) -> bool:
+        if message.embeds:
+            title = message.embeds[0].title
+            if title and ("서버가 상단에 표시되었습니다." in title or "성공" in title):
+                return True
+        return False
+
+
+    # [공통] 알림 삭제 & 타이머 갱신 로직
     async def handle_success(self, guild_id, bot_type, cooldown_minutes):
         res = self.supabase.table("server_settings").select("*").eq("guild_id", guild_id).execute()
         if not res.data: return
         settings = res.data[0]
 
-        # 봇 타입에 맞는 채널 ID 가져오기
         channel_id = settings.get(f"{bot_type}_channel_id")
         msg_id_col = f"{bot_type}_msg_id"
         next_at_col = f"{bot_type}_next_at"
         
-        # 기존 알림 삭제
+        # 1. 기존 알림(내 봇이 보낸 멘션) 삭제
         old_msg_id = settings.get(msg_id_col)
         if channel_id and old_msg_id:
             try:
                 channel = self.bot.get_channel(channel_id)
                 if channel:
                     old_msg = await channel.fetch_message(old_msg_id)
-                    await old_msg.delete()
+                    await old_msg.delete() # 이것만 삭제
             except: pass
 
-        # 시간 갱신
+        # 2. 타이머 갱신
         next_time = datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes)
         self.supabase.table("server_settings").update({
-            msg_id_col: None,
+            msg_id_col: None, # 알림 삭제했으니 비움
             next_at_col: next_time.isoformat()
         }).eq("guild_id", guild_id).execute()
         
@@ -115,7 +128,7 @@ class BumpCog(commands.Cog):
 
 
     # ==========================================
-    # 3. [자동 루프] 알림 전송
+    # 4. [자동 루프] 알림 전송
     # ==========================================
     @tasks.loop(seconds=60)
     async def bump_check_loop(self):
@@ -129,18 +142,15 @@ class BumpCog(commands.Cog):
         for settings in res.data:
             guild_id = settings['guild_id']
             
-            # 각각의 설정 가져오기
             disboard_role_id = settings.get('disboard_role_id')
             disboard_channel_id = settings.get('disboard_channel_id')
             
             koreanbot_role_id = settings.get('koreanbot_role_id')
             koreanbot_channel_id = settings.get('koreanbot_channel_id')
 
-            # 디스보드 체크
             if disboard_role_id and disboard_channel_id:
                 await self.check_and_send(settings, guild_id, disboard_channel_id, disboard_role_id, "disboard", now)
             
-            # 코리안봇 체크
             if koreanbot_role_id and koreanbot_channel_id:
                 await self.check_and_send(settings, guild_id, koreanbot_channel_id, koreanbot_role_id, "koreanbot", now)
 
@@ -157,7 +167,6 @@ class BumpCog(commands.Cog):
                 if channel:
                     try:
                         msg = await channel.send(f"<@&{role_id}>")
-                        
                         self.supabase.table("server_settings").update({
                             f"{bot_type}_msg_id": msg.id
                         }).eq("guild_id", guild_id).execute()
